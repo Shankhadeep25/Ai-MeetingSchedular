@@ -1,0 +1,39 @@
+# ============================================================
+# AI Meeting Scheduler — Dependencies (all free / open-source)
+# ============================================================
+
+# LLM — Groq (free tier: 14,400 req/day)
+groq>=0.9.0
+
+# Frontend
+streamlit>=1.35.0
+
+# Google Calendar API
+google-api-python-client>=2.130.0
+google-auth-httplib2>=0.2.0
+google-auth-oauthlib>=1.2.0
+
+# Vector DB + Embeddings (fully local, no API key)
+chromadb>=0.5.0
+sentence-transformers>=3.0.0
+
+# Data validation
+pydantic>=2.7.0
+
+# Date/time parsing
+dateparser>=1.2.0
+
+# Config
+python-dotenv>=1.0.0
+
+# ORM (SQLite wrapper)
+sqlalchemy>=2.0.0
+
+# HTTP (for ntfy.sh stretch goal)
+requests>=2.31.0
+
+# Stretch: MCP server
+# Uncomment if you want the MCP stretch goal
+# fastapi>=0.111.0
+# uvicorn>=0.30.0
+# mcp>=1.0.0

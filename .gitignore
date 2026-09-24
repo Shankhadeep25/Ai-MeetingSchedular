@@ -1,0 +1,42 @@
+# ============================================================
+# AI Meeting Scheduler — .gitignore
+# ============================================================
+
+# Secrets — NEVER commit these
+.env
+credentials.json
+token.json
+
+# Local data (auto-generated)
+data/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Python environment
+venv/
+.venv/
+env/
+ENV/
+
+# Streamlit cache
+.streamlit/
+
+# ChromaDB
+*.sqlite3
+chroma_db/
+
+# Sentence-transformers model cache
+.cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
