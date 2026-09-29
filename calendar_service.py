@@ -198,6 +198,70 @@ def create_event(
 
 
 # ─────────────────────────────────────────────
+# Search & Delete Events
+# ─────────────────────────────────────────────
+
+def search_events(
+    query: str = "",
+    time_min: Optional[datetime] = None,
+    time_max: Optional[datetime] = None,
+    max_results: int = 10,
+) -> list[dict]:
+    """
+    Search for events on the primary calendar by text query or time window.
+
+    Args:
+        query: Search term (searches summary, description, attendee names/emails)
+        time_min: Optional start of search window
+        time_max: Optional end of search window
+        max_results: Max events to return
+
+    Returns:
+        List of Google Calendar event dicts
+    """
+    service = authenticate()
+    try:
+        kwargs = {
+            "calendarId": "primary",
+            "maxResults": max_results,
+            "singleEvents": True,
+            "orderBy": "startTime",
+        }
+        if query:
+            kwargs["q"] = query
+        if time_min:
+            kwargs["timeMin"] = time_min.isoformat()
+        if time_max:
+            kwargs["timeMax"] = time_max.isoformat()
+
+        result = service.events().list(**kwargs).execute()
+        return result.get("items", [])
+    except HttpError as e:
+        logger.error(f"Failed to search events: {e}")
+        return []
+
+
+def delete_event(event_id: str) -> bool:
+    """
+    Delete an event from Google Calendar by its event ID.
+
+    Args:
+        event_id: Google Calendar event ID string
+
+    Returns:
+        True if deleted successfully, False otherwise
+    """
+    service = authenticate()
+    try:
+        service.events().delete(calendarId="primary", eventId=event_id).execute()
+        logger.info(f"Successfully deleted event {event_id} from Google Calendar")
+        return True
+    except HttpError as e:
+        logger.error(f"Failed to delete event {event_id}: {e}")
+        return False
+
+
+# ─────────────────────────────────────────────
 # Find Alternative Slots
 # ─────────────────────────────────────────────
 

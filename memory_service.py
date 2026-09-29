@@ -218,6 +218,27 @@ def get_upcoming_meetings(user_id: str, days: int = 7) -> list[dict]:
         ]
 
 
+def delete_meeting_record(user_id: str, title: str = "", meeting_id: int | None = None) -> bool:
+    """Delete a meeting record from SQLite history."""
+    init_db()
+    with SessionLocal() as session:
+        query = session.query(MeetingHistory).filter(MeetingHistory.user_id == user_id)
+        if meeting_id:
+            record = query.filter(MeetingHistory.id == meeting_id).first()
+        elif title:
+            # Case insensitive substring search
+            record = query.filter(MeetingHistory.title.ilike(f"%{title}%")).order_by(MeetingHistory.id.desc()).first()
+        else:
+            return False
+
+        if record:
+            session.delete(record)
+            session.commit()
+            logger.info(f"Deleted meeting record {record.id}: {record.title}")
+            return True
+        return False
+
+
 # ─────────────────────────────────────────────
 # User Preferences
 # ─────────────────────────────────────────────

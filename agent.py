@@ -18,13 +18,20 @@ from typing import Optional
 from dotenv import load_dotenv
 
 from nlp_extractor import MeetingRequest, extract_meeting_info
-from calendar_service import check_availability, create_event, find_alternative_slots
+from calendar_service import (
+    check_availability,
+    create_event,
+    find_alternative_slots,
+    search_events,
+    delete_event,
+)
 from memory_service import (
     log_meeting,
     get_preferences,
     infer_preferences,
     get_or_create_user,
     get_upcoming_meetings,
+    delete_meeting_record,
 )
 from rag_service import retrieve_context, index_meeting
 
@@ -105,11 +112,7 @@ def _handle_new_request(user_text: str, state: dict) -> tuple[str, dict]:
         return _handle_query(user_text, state)
 
     if meeting.intent == "cancel":
-        return (
-            "To cancel a meeting, please open Google Calendar directly. "
-            "Full cancellation support is coming in a future update! 🗓️",
-            state,
-        )
+        return _handle_cancel(meeting, user_text, state)
 
     # Step 2: Check if ambiguous
     if meeting.is_ambiguous:
@@ -330,10 +333,25 @@ def _book_meeting(
     if event_link:
         response += f"🔗 [View on Google Calendar]({event_link})"
 
+    # Optional Push Notification (Stretch Goal - Free ntfy.sh)
+    ntfy_topic = os.getenv("NTFY_TOPIC")
+    if ntfy_topic:
+        try:
+            from stretch.notify_service import send_notification
+            send_notification(
+                title=f"🗓️ Booked: {meeting.title}",
+                message=f"{time_str} ({duration_str}){participants_str}",
+                click_url=event_link or None,
+                tags=["calendar", "white_check_mark"],
+            )
+        except Exception as e:
+            logger.debug(f"Push notification skipped/failed: {e}")
+
     # Reset state
     state["pending_request"] = None
     state["awaiting_slot_selection"] = False
     state["alternative_slots"] = []
+    state["conversation_history"] = []
 
     return response, state
 
@@ -356,6 +374,63 @@ def _handle_query(user_text: str, state: dict) -> tuple[str, dict]:
         lines.append(line)
 
     return "\n".join(lines), state
+
+
+def _handle_cancel(meeting: MeetingRequest, user_text: str, state: dict) -> tuple[str, dict]:
+    """Handle cancelling a meeting on Google Calendar & SQLite history."""
+    user_id = state["user_id"]
+
+    # 1. Determine search query
+    search_term = ""
+    if meeting.participants:
+        search_term = meeting.participants[0]
+    elif meeting.title and meeting.title.lower() != "meeting":
+        search_term = meeting.title
+    else:
+        # Filter filler words from raw user text
+        stopwords = {"cancel", "delete", "remove", "the", "my", "meeting", "call", "with", "at", "on", "please"}
+        words = [w for w in user_text.split() if w.lower() not in stopwords]
+        search_term = " ".join(words)
+
+    # 2. Search Google Calendar
+    events = search_events(query=search_term, max_results=5)
+
+    if not events:
+        return (
+            f"🔍 I couldn't find any meeting matching **'{search_term or user_text}'** on your Google Calendar to cancel.",
+            state,
+        )
+
+    # 3. Pick the matched event
+    target_event = events[0]
+    event_id = target_event["id"]
+    event_summary = target_event.get("summary", "Meeting")
+    start_time_raw = target_event["start"].get("dateTime", target_event["start"].get("date", ""))
+
+    time_display = start_time_raw
+    try:
+        from datetime import datetime
+        dt = datetime.fromisoformat(start_time_raw)
+        time_display = dt.strftime("%A, %B %d at %I:%M %p")
+    except Exception:
+        pass
+
+    # 4. Delete from Google Calendar
+    success = delete_event(event_id)
+    state["conversation_history"] = []
+    if success:
+        # Also clean up SQLite history
+        delete_meeting_record(user_id, title=event_summary)
+        return (
+            f"🗑️ **Meeting cancelled!**\n\n"
+            f"Successfully removed **{event_summary}** ({time_display}) from your Google Calendar.",
+            state,
+        )
+    else:
+        return (
+            f"⚠️ Found **{event_summary}**, but encountered an error trying to delete it from Google Calendar.",
+            state,
+        )
 
 
 def _get_rag_context(meeting: MeetingRequest, user_id: str) -> list[str]:

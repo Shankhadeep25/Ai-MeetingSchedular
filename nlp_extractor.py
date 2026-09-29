@@ -84,7 +84,7 @@ MEETING_TOOL_SCHEMA = {
                     "description": "The user's intent regarding the meeting",
                 },
                 "title": {
-                    "type": "string",
+                    "type": ["string", "null"],
                     "description": "Meeting title or topic (infer from context if not stated)",
                 },
                 "participants": {
@@ -93,20 +93,20 @@ MEETING_TOOL_SCHEMA = {
                     "description": "List of participant names or emails mentioned",
                 },
                 "date_phrase": {
-                    "type": "string",
-                    "description": "Exact date/time phrase from the user's message",
+                    "type": ["string", "null"],
+                    "description": "Exact date/time phrase from the user's message, or null if none",
                 },
                 "duration_minutes": {
-                    "type": "integer",
+                    "type": ["integer", "null"],
                     "description": "Duration in minutes. Default 30 if not mentioned.",
                 },
                 "is_ambiguous": {
                     "type": "boolean",
-                    "description": "True if date/time is missing, unclear, or contradictory",
+                    "description": "True if date/time is missing for a schedule request",
                 },
                 "clarification_needed": {
-                    "type": "string",
-                    "description": "The specific question to ask the user if is_ambiguous is True",
+                    "type": ["string", "null"],
+                    "description": "The specific question to ask if is_ambiguous is True, or null if clear",
                 },
             },
             "required": ["intent", "is_ambiguous"],
@@ -119,15 +119,13 @@ Your job is to extract structured meeting information from natural language requ
 
 Rules:
 1. Always call the extract_meeting_request tool — never respond in plain text.
-2. If the user mentions a date/time phrase (e.g., "next Tuesday", "tomorrow at 3pm", "Friday afternoon"), 
-   extract it verbatim into date_phrase, even if the time is vague.
-3. Set is_ambiguous=True ONLY if no date/time information is present at all, 
-   or if it's truly contradictory.
-4. For duration: if user says "quick call" → 15 min, "30 minutes" → 30, 
-   "an hour" → 60. Default is 30 if unspecified.
-5. Infer meeting title from context: "call with Rahul" → "Call with Rahul", 
-   "team standup" → "Team Standup".
-6. For reschedule/cancel intents, still extract whatever meeting identifiers you can.
+2. If the user wants to cancel, delete, or remove a meeting, set intent="cancel" and is_ambiguous=False.
+3. If the user mentions a date/time phrase (e.g., "next Tuesday", "tomorrow at 3pm"), 
+   extract it verbatim into date_phrase.
+4. Set is_ambiguous=True ONLY if the request is to schedule a meeting but date/time is completely missing.
+5. If is_ambiguous is False, set clarification_needed to null.
+6. For duration: default is 30 if unspecified.
+7. Infer meeting title or topic from context: "call with Rahul" → "Call with Rahul", "meeting with Mr. Cohen" → "Meeting with Mr. Cohen".
 """
 
 
@@ -219,14 +217,52 @@ def extract_meeting_info(
         )
     except Exception as e:
         logger.error(f"Groq API call failed: {e}")
-        # Return a safe ambiguous request so the agent can ask for clarification
-        return MeetingRequest(
-            intent="schedule",
-            is_ambiguous=True,
-            clarification_needed=(
-                "I had trouble understanding that. Could you rephrase your meeting request?"
-            ),
-        )
+        error_msg = str(e)
+        
+        # Auto-fallback if the specified model is not found on this Groq account
+        if "model_not_found" in error_msg or "404" in error_msg:
+            fallback_model = "llama-3.1-8b-instant"
+            if model != fallback_model:
+                logger.info(f"Model '{model}' not found. Retrying with fallback: '{fallback_model}'...")
+                try:
+                    response = client.chat.completions.create(
+                        model=fallback_model,
+                        messages=messages,
+                        tools=[MEETING_TOOL_SCHEMA],
+                        tool_choice="required",
+                        temperature=0.1,
+                        max_tokens=512,
+                    )
+                except Exception as fallback_err:
+                    return MeetingRequest(
+                        intent="schedule",
+                        is_ambiguous=True,
+                        clarification_needed=f"⚠️ Model error: {fallback_err}. Please set GROQ_MODEL=llama-3.1-8b-instant in `.env`.",
+                    )
+            else:
+                return MeetingRequest(
+                    intent="schedule",
+                    is_ambiguous=True,
+                    clarification_needed=f"⚠️ Model '{model}' not accessible on this Groq account.",
+                )
+        elif "401" in error_msg or "Invalid API Key" in error_msg or "invalid_api_key" in error_msg:
+            return MeetingRequest(
+                intent="schedule",
+                is_ambiguous=True,
+                clarification_needed="⚠️ **Groq API Key Error:** Your `GROQ_API_KEY` in `.env` is invalid. Please check https://console.groq.com.",
+            )
+        elif "rate_limit" in error_msg or "429" in error_msg:
+            return MeetingRequest(
+                intent="schedule",
+                is_ambiguous=True,
+                clarification_needed="⚠️ **Groq Rate Limit:** Please wait a moment and try again.",
+            )
+        else:
+            return MeetingRequest(
+                intent="schedule",
+                is_ambiguous=True,
+                clarification_needed=f"⚠️ Groq error: {error_msg}",
+            )
 
     # Parse tool call response
     tool_calls = response.choices[0].message.tool_calls
@@ -252,19 +288,19 @@ def extract_meeting_info(
         )
 
     # Resolve date phrase → absolute datetime
-    date_phrase = args.get("date_phrase", "")
+    date_phrase = args.get("date_phrase") or ""
     resolved_dt = resolve_date(date_phrase, tz) if date_phrase else None
 
-    # Build and validate the Pydantic model
+    # Build and validate the Pydantic model safely handling nulls
     meeting = MeetingRequest(
         intent=args.get("intent", "schedule"),
-        title=args.get("title", "Meeting"),
-        participants=args.get("participants", []),
+        title=args.get("title") or "Meeting",
+        participants=args.get("participants") or [],
         date_phrase=date_phrase,
         resolved_datetime=resolved_dt,
-        duration_minutes=args.get("duration_minutes", int(os.getenv("DEFAULT_MEETING_DURATION", 30))),
+        duration_minutes=args.get("duration_minutes") or int(os.getenv("DEFAULT_MEETING_DURATION", 30)),
         is_ambiguous=args.get("is_ambiguous", False),
-        clarification_needed=args.get("clarification_needed", ""),
+        clarification_needed=args.get("clarification_needed") or "",
     )
 
     # If date phrase exists but couldn't be resolved, mark as ambiguous
