@@ -28,7 +28,8 @@ python-dotenv>=1.0.0
 
 # ORM & Cloud Relational DB (SQLite / PostgreSQL)
 sqlalchemy>=2.0.0
-psycopg2-binary>=2.9.0
+psycopg2-binary>=2.9.0   # local / fallback
+psycopg[binary]>=3.1.0   # psycopg v3 — required for Python 3.14 on Render
 
 # Cloud Vector DB (Optional: Pinecone)
 pinecone>=5.0.0
