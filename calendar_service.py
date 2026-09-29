@@ -40,11 +40,35 @@ TOKEN_PATH = os.getenv("GOOGLE_TOKEN_PATH", "./token.json")
 DEFAULT_TZ = os.getenv("DEFAULT_TIMEZONE", "Asia/Kolkata")
 
 
+def _load_token_dict(raw: Optional[str]) -> Optional[dict]:
+    """Parse JSON token from environment variable with lenient handling of quotes."""
+    if not raw or not raw.strip():
+        return None
+    cleaned = raw.strip()
+    # Strip accidental surrounding quotes if user copied with quotes
+    if (cleaned.startswith("'") and cleaned.endswith("'")) or (cleaned.startswith('"') and cleaned.endswith('"')):
+        cleaned = cleaned[1:-1].strip()
+    if '\\"' in cleaned and '"token"' not in cleaned:
+        cleaned = cleaned.replace('\\"', '"')
+
+    try:
+        data = json.loads(cleaned)
+        if isinstance(data, str):
+            data = json.loads(data)
+        if isinstance(data, dict):
+            return data
+    except Exception as e:
+        logger.warning(f"Failed to parse token JSON string: {e}")
+    return None
+
+
 def is_calendar_configured() -> bool:
     """Return True if credentials or token are available either via file or env var."""
+    token_env = os.getenv("GOOGLE_TOKEN_JSON")
+    if token_env and _load_token_dict(token_env) is not None:
+        return True
     return bool(
-        os.getenv("GOOGLE_TOKEN_JSON")
-        or os.path.exists(TOKEN_PATH)
+        os.path.exists(TOKEN_PATH)
         or os.path.exists("/etc/secrets/token.json")
         or os.getenv("GOOGLE_CREDENTIALS_JSON")
         or os.path.exists(CREDENTIALS_PATH)
@@ -75,12 +99,15 @@ def authenticate():
 
     # 1. Load from GOOGLE_TOKEN_JSON environment variable (cloud-friendly)
     if token_json_env:
-        try:
-            token_data = json.loads(token_json_env.strip())
-            creds = Credentials.from_authorized_user_info(token_data, SCOPES)
-            logger.info("Loaded Google credentials from GOOGLE_TOKEN_JSON environment variable")
-        except Exception as e:
-            logger.warning(f"Failed to parse GOOGLE_TOKEN_JSON environment variable: {e}")
+        token_data = _load_token_dict(token_json_env)
+        if token_data:
+            try:
+                creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+                logger.info("Loaded Google credentials from GOOGLE_TOKEN_JSON environment variable")
+            except Exception as e:
+                logger.warning(f"Failed to create Credentials from GOOGLE_TOKEN_JSON: {e}")
+        else:
+            logger.warning("GOOGLE_TOKEN_JSON is set but does not contain valid JSON dictionary")
 
     # 2. Load existing token file (local or Render Secret File)
     if not creds:

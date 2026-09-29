@@ -146,14 +146,18 @@ def _get_collection():
     """Get or create the ChromaDB collection (cached after first call)."""
     global _chroma_client, _collection
     if _collection is None:
-        import chromadb
-        _chroma_client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
-        _collection = _chroma_client.get_or_create_collection(
-            name=COLLECTION_NAME,
-            embedding_function=_get_embedding_function(),
-            metadata={"hnsw:space": "cosine"},  # cosine similarity
-        )
-        logger.info(f"ChromaDB collection '{COLLECTION_NAME}' ready ({_collection.count()} docs)")
+        try:
+            import chromadb
+            _chroma_client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
+            _collection = _chroma_client.get_or_create_collection(
+                name=COLLECTION_NAME,
+                embedding_function=_get_embedding_function(),
+                metadata={"hnsw:space": "cosine"},  # cosine similarity
+            )
+            logger.info(f"ChromaDB collection '{COLLECTION_NAME}' ready ({_collection.count()} docs)")
+        except ImportError:
+            logger.info("chromadb not installed — skipping local ChromaDB collection initialization")
+            return None
     return _collection
 
 
@@ -192,24 +196,14 @@ def _build_document(meeting: dict) -> str:
 
 def index_meeting(meeting_id: int | str, meeting: dict, user_id: str) -> None:
     """
-    Embed and store a meeting in ChromaDB for future semantic retrieval.
+    Embed and store a meeting in Pinecone or ChromaDB for future semantic retrieval.
 
     Args:
-        meeting_id: Unique ID (from SQLite autoincrement)
+        meeting_id: Unique ID (from database autoincrement)
         meeting:    Dict with title, participants, start_time, duration_mins
         user_id:    User identifier for filtering
-
-    Skips silently if the document already exists.
     """
-    collection = _get_collection()
     doc_id = f"meeting_{user_id}_{meeting_id}"
-
-    # Check if already indexed
-    existing = collection.get(ids=[doc_id])
-    if existing["ids"]:
-        logger.debug(f"Meeting {doc_id} already indexed, skipping")
-        return
-
     document = _build_document(meeting)
     participants = meeting.get("participants", [])
     start = meeting.get("start_time")
@@ -222,7 +216,7 @@ def index_meeting(meeting_id: int | str, meeting: dict, user_id: str) -> None:
         "event_link": meeting.get("event_link", ""),
     }
 
-    # Pinecone Cloud Path
+    # Pinecone Cloud Path (checked first — no ChromaDB or PyTorch needed)
     if PINECONE_API_KEY:
         try:
             index = _get_pinecone_index()
@@ -239,15 +233,26 @@ def index_meeting(meeting_id: int | str, meeting: dict, user_id: str) -> None:
         except Exception as e:
             logger.warning(f"Pinecone indexing error: {e}, falling back to local ChromaDB")
 
-    # Local ChromaDB Fallback
-    collection = _get_collection()
-    collection.add(
-        ids=[doc_id],
-        documents=[document],
-        metadatas=[metadata],
-    )
+    # Local ChromaDB Fallback (if installed)
+    try:
+        collection = _get_collection()
+        if collection is None:
+            logger.info(f"Skipping vector indexing for {doc_id} (Pinecone not active and ChromaDB not installed)")
+            return
 
-    logger.info(f"Indexed meeting {doc_id}: {document!r}")
+        existing = collection.get(ids=[doc_id])
+        if existing["ids"]:
+            logger.debug(f"Meeting {doc_id} already indexed, skipping")
+            return
+
+        collection.add(
+            ids=[doc_id],
+            documents=[document],
+            metadatas=[metadata],
+        )
+        logger.info(f"Indexed meeting {doc_id} to ChromaDB: {document!r}")
+    except Exception as e:
+        logger.warning(f"ChromaDB indexing skipped or failed: {e}")
 
 
 # ─────────────────────────────────────────────
@@ -302,6 +307,9 @@ def retrieve_context(
 
     # Local ChromaDB Fallback
     collection = _get_collection()
+    if collection is None:
+        logger.info("ChromaDB not available — skipping local context retrieval")
+        return []
 
     if collection.count() == 0:
         logger.info("ChromaDB collection is empty — no context to retrieve")
