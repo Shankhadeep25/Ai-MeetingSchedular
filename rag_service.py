@@ -35,6 +35,10 @@ COLLECTION_NAME = "meetings"
 # Pinecone Cloud Vector DB (Optional)
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "ai-meetings")
+# Use Pinecone's hosted inference to avoid loading PyTorch locally (saves ~400MB RAM)
+# Set PINECONE_INFERENCE_MODEL=none to force local sentence-transformers instead
+PINECONE_INFERENCE_MODEL = os.getenv("PINECONE_INFERENCE_MODEL", "multilingual-e5-large")
+USE_PINECONE_INFERENCE = bool(PINECONE_API_KEY) and PINECONE_INFERENCE_MODEL.lower() != "none"
 
 # Ensure chroma directory exists for fallback
 os.makedirs(CHROMA_PERSIST_DIR, exist_ok=True)
@@ -49,13 +53,48 @@ _collection = None
 _embedding_fn = None
 _st_model = None
 _pinecone_index = None
+_pinecone_client = None  # shared Pinecone client for inference + index
+
+
+def _get_pinecone_client():
+    """Return a cached Pinecone client instance."""
+    global _pinecone_client
+    if _pinecone_client is None and PINECONE_API_KEY:
+        from pinecone import Pinecone
+        _pinecone_client = Pinecone(api_key=PINECONE_API_KEY)
+    return _pinecone_client
+
+
+def _embed_with_pinecone(texts: list[str]) -> list[list[float]]:
+    """
+    Use Pinecone's hosted inference API to create embeddings.
+    This avoids loading sentence-transformers + PyTorch locally (~400MB saved).
+    """
+    pc = _get_pinecone_client()
+    result = pc.inference.embed(
+        model=PINECONE_INFERENCE_MODEL,
+        inputs=texts,
+        parameters={"input_type": "passage", "truncate": "END"},
+    )
+    return [item["values"] for item in result]
+
+
+def _embed_query_with_pinecone(query: str) -> list[float]:
+    """Embed a single query string using Pinecone inference."""
+    pc = _get_pinecone_client()
+    result = pc.inference.embed(
+        model=PINECONE_INFERENCE_MODEL,
+        inputs=[query],
+        parameters={"input_type": "query", "truncate": "END"},
+    )
+    return result[0]["values"]
 
 
 def _get_sentence_transformer_model():
-    """Load local sentence-transformers encoder."""
+    """Load local sentence-transformers encoder (only used when Pinecone inference is off)."""
     global _st_model
     if _st_model is None:
-        logger.info(f"Loading embedding model: {EMBEDDING_MODEL}...")
+        logger.info(f"Loading local embedding model: {EMBEDDING_MODEL}...")
         from sentence_transformers import SentenceTransformer
         _st_model = SentenceTransformer(EMBEDDING_MODEL)
     return _st_model
@@ -65,14 +104,17 @@ def _get_pinecone_index():
     """Connect to Pinecone Cloud Serverless Index."""
     global _pinecone_index
     if _pinecone_index is None and PINECONE_API_KEY:
-        from pinecone import Pinecone, ServerlessSpec
-        pc = Pinecone(api_key=PINECONE_API_KEY)
+        from pinecone import ServerlessSpec
+        pc = _get_pinecone_client()
         existing = [idx["name"] for idx in pc.list_indexes()]
+        # Dimension depends on embedding model:
+        # multilingual-e5-large → 1024, all-MiniLM-L6-v2 → 384
+        dim = 1024 if USE_PINECONE_INFERENCE else 384
         if PINECONE_INDEX_NAME not in existing:
-            logger.info(f"Creating Pinecone index '{PINECONE_INDEX_NAME}' (384-dim, cosine)...")
+            logger.info(f"Creating Pinecone index '{PINECONE_INDEX_NAME}' ({dim}-dim, cosine)...")
             pc.create_index(
                 name=PINECONE_INDEX_NAME,
-                dimension=384,
+                dimension=dim,
                 metric="cosine",
                 spec=ServerlessSpec(cloud="aws", region="us-east-1"),
             )
@@ -82,10 +124,10 @@ def _get_pinecone_index():
 
 
 def _get_embedding_function():
-    """Load sentence-transformers embedding function (cached after first call)."""
+    """Load sentence-transformers embedding function for local ChromaDB (cached after first call)."""
     global _embedding_fn
     if _embedding_fn is None:
-        logger.info(f"Loading embedding model: {EMBEDDING_MODEL} (first load may take a moment)...")
+        logger.info(f"Loading local embedding model: {EMBEDDING_MODEL} (first load may take a moment)...")
         try:
             from chromadb.utils import embedding_functions
             _embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
@@ -184,8 +226,12 @@ def index_meeting(meeting_id: int | str, meeting: dict, user_id: str) -> None:
     if PINECONE_API_KEY:
         try:
             index = _get_pinecone_index()
-            encoder = _get_sentence_transformer_model()
-            vector = encoder.encode(document).tolist()
+            if USE_PINECONE_INFERENCE:
+                # Use Pinecone hosted inference — no PyTorch needed locally
+                vector = _embed_with_pinecone([document])[0]
+            else:
+                encoder = _get_sentence_transformer_model()
+                vector = encoder.encode(document).tolist()
             metadata["document"] = document
             index.upsert(vectors=[{"id": doc_id, "values": vector, "metadata": metadata}])
             logger.info(f"Indexed meeting {doc_id} to Pinecone Cloud: {document!r}")
@@ -230,8 +276,12 @@ def retrieve_context(
     if PINECONE_API_KEY:
         try:
             index = _get_pinecone_index()
-            encoder = _get_sentence_transformer_model()
-            query_vector = encoder.encode(query).tolist()
+            if USE_PINECONE_INFERENCE:
+                # Use Pinecone hosted inference — no PyTorch needed locally
+                query_vector = _embed_query_with_pinecone(query)
+            else:
+                encoder = _get_sentence_transformer_model()
+                query_vector = encoder.encode(query).tolist()
             filter_dict = {"user_id": user_id} if user_id else None
             res = index.query(
                 vector=query_vector,

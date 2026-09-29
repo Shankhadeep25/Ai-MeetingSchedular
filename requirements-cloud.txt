@@ -1,0 +1,40 @@
+# ============================================================
+# AI Meeting Scheduler — Cloud Requirements (Render / Railway)
+# ============================================================
+# Use this file on Render instead of requirements.txt
+# Build Command: pip install -r requirements-cloud.txt
+#
+# Key difference: sentence-transformers + chromadb are OMITTED
+# because Pinecone hosted inference handles embeddings (~400MB saved)
+# ============================================================
+
+# LLM — Groq
+groq>=0.9.0
+
+# Frontend
+streamlit>=1.35.0
+
+# Google Calendar API
+google-api-python-client>=2.130.0
+google-auth-httplib2>=0.2.0
+google-auth-oauthlib>=1.2.0
+
+# Data validation
+pydantic>=2.7.0
+
+# Date/time parsing
+dateparser>=1.2.0
+
+# Config
+python-dotenv>=1.0.0
+
+# ORM & Cloud Relational DB (PostgreSQL)
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+psycopg[binary]>=3.1.0
+
+# Cloud Vector DB — Pinecone (hosted inference, no PyTorch needed)
+pinecone>=5.0.0
+
+# HTTP
+requests>=2.31.0

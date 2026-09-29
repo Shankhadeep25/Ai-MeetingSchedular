@@ -13,7 +13,10 @@ google-api-python-client>=2.130.0
 google-auth-httplib2>=0.2.0
 google-auth-oauthlib>=1.2.0
 
-# Vector DB + Embeddings (fully local, no API key)
+# Vector DB + Embeddings
+# NOTE: On cloud (Render + Pinecone), these are NOT needed — Pinecone hosted inference is used.
+# They are only required for local development without Pinecone.
+# Comment these out on Render to save ~400MB RAM:
 chromadb>=0.5.0
 sentence-transformers>=3.0.0
 
