@@ -24,6 +24,7 @@ from calendar_service import (
     find_alternative_slots,
     search_events,
     delete_event,
+    is_calendar_configured,
 )
 from memory_service import (
     log_meeting,
@@ -147,7 +148,12 @@ def _handle_new_request(user_text: str, state: dict) -> tuple[str, dict]:
     end_dt = start_dt + timedelta(minutes=meeting.duration_minutes)
 
     logger.info(f"Checking availability: {start_dt} → {end_dt}")
-    is_free = check_availability(start_dt, end_dt)
+    is_free = True
+    try:
+        is_free = check_availability(start_dt, end_dt)
+    except Exception as e:
+        logger.warning(f"Google Calendar availability check skipped: {e}")
+        is_free = True
 
     # Step 6a: Slot is free → book it
     if is_free:
@@ -275,14 +281,17 @@ def _book_meeting(
         description = "Context from past meetings:\n" + "\n".join(f"• {c}" for c in rag_context)
 
     logger.info(f"Creating event: {meeting.title!r} at {start_dt}")
-
-    event_link = create_event(
-        summary=meeting.title,
-        start=start_dt,
-        end=end_dt,
-        attendees=meeting.participants,
-        description=description,
-    )
+    event_link = ""
+    try:
+        event_link = create_event(
+            summary=meeting.title,
+            start=start_dt,
+            end=end_dt,
+            attendees=meeting.participants,
+            description=description,
+        )
+    except Exception as e:
+        logger.warning(f"Google Calendar create_event skipped: {e}")
 
     # Log to SQLite
     db_meeting_id = log_meeting(
@@ -332,6 +341,11 @@ def _book_meeting(
 
     if event_link:
         response += f"🔗 [View on Google Calendar]({event_link})"
+    elif not is_calendar_configured():
+        response += (
+            "\n\n*(ℹ️ Note: Saved to database, but Google Calendar invite was not generated because Google Calendar is not connected yet. "
+            "Add `GOOGLE_TOKEN_JSON` to Render's Environment Variables to enable live Google Calendar syncing.)*"
+        )
 
     # Optional Push Notification (Stretch Goal - Free ntfy.sh)
     ntfy_topic = os.getenv("NTFY_TOPIC")
@@ -393,7 +407,11 @@ def _handle_cancel(meeting: MeetingRequest, user_text: str, state: dict) -> tupl
         search_term = " ".join(words)
 
     # 2. Search Google Calendar
-    events = search_events(query=search_term, max_results=5)
+    events = []
+    try:
+        events = search_events(query=search_term, max_results=5)
+    except Exception as e:
+        logger.warning(f"Google Calendar search skipped: {e}")
 
     if not events:
         return (

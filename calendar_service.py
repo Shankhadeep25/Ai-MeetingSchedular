@@ -30,12 +30,26 @@ logger = logging.getLogger(__name__)
 # Constants
 # ─────────────────────────────────────────────
 
+import json
+
 # Scopes required: read/write calendar events
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
 CREDENTIALS_PATH = os.getenv("GOOGLE_CREDENTIALS_PATH", "./credentials.json")
 TOKEN_PATH = os.getenv("GOOGLE_TOKEN_PATH", "./token.json")
 DEFAULT_TZ = os.getenv("DEFAULT_TIMEZONE", "Asia/Kolkata")
+
+
+def is_calendar_configured() -> bool:
+    """Return True if credentials or token are available either via file or env var."""
+    return bool(
+        os.getenv("GOOGLE_TOKEN_JSON")
+        or os.path.exists(TOKEN_PATH)
+        or os.path.exists("/etc/secrets/token.json")
+        or os.getenv("GOOGLE_CREDENTIALS_JSON")
+        or os.path.exists(CREDENTIALS_PATH)
+        or os.path.exists("/etc/secrets/credentials.json")
+    )
 
 
 # ─────────────────────────────────────────────
@@ -47,40 +61,107 @@ def authenticate():
     Authenticate with Google Calendar API using OAuth2.
 
     Flow:
-    1. If token.json exists and is valid → use it directly
-    2. If token.json is expired → auto-refresh using refresh_token
-    3. If neither → open browser for user consent → save token.json
+    1. Check GOOGLE_TOKEN_JSON env var (used on Render / cloud)
+    2. Check local token.json or /etc/secrets/token.json
+    3. If token is expired, auto-refresh using refresh_token
+    4. If no token, check credentials.json or GOOGLE_CREDENTIALS_JSON
+    5. In cloud/headless environments, inform user to supply GOOGLE_TOKEN_JSON
 
     Returns:
         Authenticated Google API service object
     """
     creds = None
+    token_json_env = os.getenv("GOOGLE_TOKEN_JSON")
 
-    # Load existing token
-    if os.path.exists(TOKEN_PATH):
-        creds = Credentials.from_authorized_user_file(TOKEN_PATH, SCOPES)
+    # 1. Load from GOOGLE_TOKEN_JSON environment variable (cloud-friendly)
+    if token_json_env:
+        try:
+            token_data = json.loads(token_json_env.strip())
+            creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+            logger.info("Loaded Google credentials from GOOGLE_TOKEN_JSON environment variable")
+        except Exception as e:
+            logger.warning(f"Failed to parse GOOGLE_TOKEN_JSON environment variable: {e}")
 
-    # Refresh or re-authenticate
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
+    # 2. Load existing token file (local or Render Secret File)
+    if not creds:
+        candidate_token_paths = [
+            TOKEN_PATH,
+            "/etc/secrets/token.json",
+        ]
+        for path in candidate_token_paths:
+            if os.path.exists(path):
+                try:
+                    creds = Credentials.from_authorized_user_file(path, SCOPES)
+                    logger.info(f"Loaded Google credentials from {path}")
+                    break
+                except Exception as e:
+                    logger.warning(f"Failed reading token from {path}: {e}")
+
+    # 3. Refresh or validate
+    if creds and not creds.valid:
+        if creds.expired and creds.refresh_token:
             logger.info("Refreshing expired Google OAuth token...")
-            creds.refresh(Request())
-        else:
-            if not os.path.exists(CREDENTIALS_PATH):
-                raise FileNotFoundError(
-                    f"credentials.json not found at {CREDENTIALS_PATH}.\n"
-                    "Download it from Google Cloud Console:\n"
-                    "  APIs & Services → Credentials → OAuth 2.0 Client IDs → Download JSON\n"
-                    "  Rename to credentials.json and place in the project root."
-                )
-            logger.info("Opening browser for Google OAuth2 consent...")
-            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, SCOPES)
-            creds = flow.run_local_server(port=0)
+            try:
+                creds.refresh(Request())
+                if os.path.exists(TOKEN_PATH):
+                    try:
+                        with open(TOKEN_PATH, "w") as token_file:
+                            token_file.write(creds.to_json())
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.error(f"Failed to refresh Google OAuth token: {e}")
+                creds = None
 
-        # Save token for future runs
-        with open(TOKEN_PATH, "w") as token_file:
-            token_file.write(creds.to_json())
-        logger.info(f"Token saved to {TOKEN_PATH}")
+    # 4. If no valid token found, try credentials.json flow
+    if not creds or not creds.valid:
+        creds_path = None
+        candidate_creds_paths = [
+            CREDENTIALS_PATH,
+            "/etc/secrets/credentials.json",
+        ]
+        for path in candidate_creds_paths:
+            if os.path.exists(path):
+                creds_path = path
+                break
+
+        # Check GOOGLE_CREDENTIALS_JSON env var
+        creds_json_env = os.getenv("GOOGLE_CREDENTIALS_JSON")
+        if not creds_path and creds_json_env:
+            import tempfile
+            temp_creds = tempfile.NamedTemporaryFile("w", delete=False, suffix=".json")
+            temp_creds.write(creds_json_env.strip())
+            temp_creds.close()
+            creds_path = temp_creds.name
+
+        if not creds_path:
+            raise FileNotFoundError(
+                "Google Calendar is not configured.\n\n"
+                "To connect Google Calendar on Render:\n"
+                "1. Go to your Render Dashboard -> Environment Variables.\n"
+                "2. Add `GOOGLE_TOKEN_JSON` and paste the contents of your local `token.json`.\n"
+                "   (Or add `token.json` as a 'Secret File' in Render)."
+            )
+
+        # In headless cloud environments, browser flow cannot be launched
+        is_cloud = os.getenv("RENDER") or os.getenv("PORT")
+        if is_cloud:
+            raise RuntimeError(
+                "Browser authentication cannot run in a cloud container.\n"
+                "Please copy your local `token.json` into Render as the `GOOGLE_TOKEN_JSON` environment variable."
+            )
+
+        logger.info("Opening browser for Google OAuth2 consent...")
+        flow = InstalledAppFlow.from_client_secrets_file(creds_path, SCOPES)
+        creds = flow.run_local_server(port=0)
+
+        # Save token for future runs locally
+        try:
+            with open(TOKEN_PATH, "w") as token_file:
+                token_file.write(creds.to_json())
+            logger.info(f"Token saved to {TOKEN_PATH}")
+        except Exception:
+            pass
 
     service = build("calendar", "v3", credentials=creds)
     logger.info("Google Calendar API authenticated successfully")

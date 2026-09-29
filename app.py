@@ -185,14 +185,22 @@ with st.sidebar:
         st.markdown('<span class="status-badge status-warning">⚠ Groq Key Missing</span>', unsafe_allow_html=True)
 
     # Google Calendar Status
-    has_creds = os.path.exists(CREDENTIALS_PATH)
-    has_token = os.path.exists(TOKEN_PATH)
+    has_token = (
+        bool(os.getenv("GOOGLE_TOKEN_JSON"))
+        or os.path.exists(TOKEN_PATH)
+        or os.path.exists("/etc/secrets/token.json")
+    )
+    has_creds = (
+        bool(os.getenv("GOOGLE_CREDENTIALS_JSON"))
+        or os.path.exists(CREDENTIALS_PATH)
+        or os.path.exists("/etc/secrets/credentials.json")
+    )
     if has_token:
         st.markdown('<span class="status-badge status-connected">● Google Calendar Active</span>', unsafe_allow_html=True)
     elif has_creds:
         st.markdown('<span class="status-badge status-warning">○ OAuth Pending Auth</span>', unsafe_allow_html=True)
     else:
-        st.markdown('<span class="status-badge status-warning">⚠ credentials.json Missing</span>', unsafe_allow_html=True)
+        st.markdown('<span class="status-badge status-warning">⚠ Google Calendar Not Connected</span>', unsafe_allow_html=True)
 
     # Storage Status (Relational DB & Vector DB)
     if os.getenv("DATABASE_URL"):
