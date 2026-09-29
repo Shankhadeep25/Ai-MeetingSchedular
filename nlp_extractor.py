@@ -88,9 +88,9 @@ MEETING_TOOL_SCHEMA = {
                     "description": "Meeting title or topic (infer from context if not stated)",
                 },
                 "participants": {
-                    "type": "array",
+                    "type": ["array", "null"],
                     "items": {"type": "string"},
-                    "description": "List of participant names or emails mentioned",
+                    "description": "List of participant names or emails mentioned, or null/empty array if none",
                 },
                 "date_phrase": {
                     "type": ["string", "null"],
@@ -119,13 +119,15 @@ Your job is to extract structured meeting information from natural language requ
 
 Rules:
 1. Always call the extract_meeting_request tool — never respond in plain text.
-2. If the user wants to cancel, delete, or remove a meeting, set intent="cancel" and is_ambiguous=False.
-3. If the user mentions a date/time phrase (e.g., "next Tuesday", "tomorrow at 3pm"), 
+2. If the user asks about existing meetings or their schedule, set intent="query" and is_ambiguous=False.
+3. If the user wants to cancel, delete, or remove a meeting, set intent="cancel" and is_ambiguous=False.
+4. If the user mentions a date/time phrase (e.g., "next Tuesday", "tomorrow at 3pm"), 
    extract it verbatim into date_phrase.
-4. Set is_ambiguous=True ONLY if the request is to schedule a meeting but date/time is completely missing.
-5. If is_ambiguous is False, set clarification_needed to null.
-6. For duration: default is 30 if unspecified.
-7. Infer meeting title or topic from context: "call with Rahul" → "Call with Rahul", "meeting with Mr. Cohen" → "Meeting with Mr. Cohen".
+5. Set is_ambiguous=True ONLY if the request is to schedule a meeting but date/time is completely missing.
+6. If is_ambiguous is False, set clarification_needed to null.
+7. For duration: default is 30 if unspecified.
+8. If no participants are mentioned, return [] or null for participants.
+9. Infer meeting title or topic from context: "call with Rahul" → "Call with Rahul", "meeting with Mr. Cohen" → "Meeting with Mr. Cohen".
 """
 
 

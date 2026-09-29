@@ -329,8 +329,14 @@ def _book_meeting(
         if meeting.duration_minutes != 60
         else "1 hour"
     )
+    has_participant_in_title = any(
+        p.lower() in meeting.title.lower() for p in meeting.participants
+    ) if meeting.participants else False
+
     participants_str = (
-        f" with {', '.join(meeting.participants)}" if meeting.participants else ""
+        f" with {', '.join(meeting.participants)}"
+        if (meeting.participants and not has_participant_in_title)
+        else ""
     )
 
     response = (
