@@ -49,6 +49,8 @@ Ai-MeetingSchedular/
 | **5** | **State Loss in Multi-turn Flow** | User picking "Option 2" loses original meeting context (title, attendees). | Stateless HTTP / LLM invocations do not preserve previous context. | Maintained `pending_request` and `alternative_slots` inside session state, allowing one-click resolution. |
 | **6** | **Cold Startup Latency** | ChromaDB and SentenceTransformer import taking 5-10 seconds on app load. | Eager importing of PyTorch / HuggingFace model weights. | Implemented lazy loading in `rag_service.py` (`_get_collection()` / `_get_embedding_function()`) initialized only on first search/index. |
 | **7** | **Zero-Cost Violation** | Paid external APIs (OpenAI embeddings, Twilio SMS). | Standard industry templates assume paid cloud SaaS. | Replaced OpenAI with local `all-MiniLM-L6-v2` (22MB CPU) and Twilio with free open-source `ntfy.sh`. |
+| **8** | **nlp_extractor.py SyntaxError** | `SyntaxError: invalid syntax` at line 284 — a duplicate `else` block from a previous partial edit left orphaned code after an already-closed `else`. | Incomplete prior edit merging two error-handler variants. | Removed the duplicate 24-line `elif/else` block; left only the canonical error handler. |
+| **9** | **Wrong Groq Model Auto-selected** | `get_best_available_model()` fell back to `models[0]` which was `canopylabs/orpheus-arabic-saudi` — a model that requires terms acceptance and doesn't support tool calling. | The fallback to `models[0]` was unsafe when the account has non-standard models. | Removed `models[0]` fallback entirely. Extended priority list to include `openai/gpt-oss-120b`, `openai/gpt-oss-20b`, and `qwen/qwen3.8-27b` which are available on this account. Updated `.env` `GROQ_MODEL=openai/gpt-oss-120b`. |
 
 ---
 
@@ -90,3 +92,13 @@ Ai-MeetingSchedular/
 - Implemented `stretch/notify_service.py` using `ntfy.sh` for push notifications.
 - Integrated automatic push alert firing in `agent.py` when an event is booked.
 - Implemented `stretch/mcp_calendar_server.py` exposing calendar tools over Model Context Protocol (FastMCP).
+
+### Phase 7: Cloud Migration & Bug Fixes (Session 3)
+- Migrated relational DB: SQLite → **Neon Cloud PostgreSQL** (`ap-southeast-1` Singapore region).
+  - `memory_service.py` reads `DATABASE_URL` from env; falls back to SQLite when unset.
+  - Added `psycopg2-binary` to `requirements.txt`.
+- Migrated vector store: ChromaDB local → **Pinecone Cloud Serverless** (free tier).
+  - `rag_service.py` reads `PINECONE_API_KEY`; falls back to local ChromaDB.
+  - Added `pinecone>=5.0.0` to `requirements.txt`.
+- **Fixed SyntaxError** in `nlp_extractor.py` (duplicate orphaned `else` block at line 284).
+- **Fixed Groq model auto-selection**: removed unsafe `models[0]` fallback; extended priority list to include `openai/gpt-oss-120b`, `openai/gpt-oss-20b`, `qwen/qwen3.8-27b`; set `GROQ_MODEL=openai/gpt-oss-120b` in `.env`.

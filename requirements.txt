@@ -26,8 +26,12 @@ dateparser>=1.2.0
 # Config
 python-dotenv>=1.0.0
 
-# ORM (SQLite wrapper)
+# ORM & Cloud Relational DB (SQLite / PostgreSQL)
 sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+
+# Cloud Vector DB (Optional: Pinecone)
+pinecone>=5.0.0
 
 # HTTP (for ntfy.sh stretch goal)
 requests>=2.31.0

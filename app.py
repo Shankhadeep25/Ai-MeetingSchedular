@@ -194,8 +194,16 @@ with st.sidebar:
     else:
         st.markdown('<span class="status-badge status-warning">⚠ credentials.json Missing</span>', unsafe_allow_html=True)
 
-    # Storage Status
-    st.markdown('<span class="status-badge status-connected">● SQLite & ChromaDB Local</span>', unsafe_allow_html=True)
+    # Storage Status (Relational DB & Vector DB)
+    if os.getenv("DATABASE_URL"):
+        st.markdown('<span class="status-badge status-connected">● Cloud PostgreSQL Active</span>', unsafe_allow_html=True)
+    else:
+        st.markdown('<span class="status-badge status-connected">● SQLite Local</span>', unsafe_allow_html=True)
+
+    if os.getenv("PINECONE_API_KEY"):
+        st.markdown('<span class="status-badge status-connected">● Pinecone Cloud Vector DB</span>', unsafe_allow_html=True)
+    else:
+        st.markdown('<span class="status-badge status-connected">● ChromaDB Local</span>', unsafe_allow_html=True)
 
     st.markdown("---")
     st.markdown("### 📋 Upcoming Schedule")

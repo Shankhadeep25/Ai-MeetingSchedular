@@ -31,15 +31,23 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────
-# Database Setup
+# Database Setup (Cloud PostgreSQL or Local SQLite)
 # ─────────────────────────────────────────────
 
+DATABASE_URL = os.getenv("DATABASE_URL")
 DB_PATH = os.getenv("SQLITE_DB_PATH", "./data/meetings.db")
 
-# Ensure data directory exists
-os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+if DATABASE_URL:
+    # Fix standard postgres:// uri prefix for SQLAlchemy
+    if DATABASE_URL.startswith("postgres://"):
+        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    logger.info("Configuring Cloud PostgreSQL connection...")
+    engine = create_engine(DATABASE_URL, echo=False, pool_pre_ping=True)
+else:
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    logger.info(f"Using local SQLite database at {DB_PATH}")
+    engine = create_engine(f"sqlite:///{DB_PATH}", echo=False)
 
-engine = create_engine(f"sqlite:///{DB_PATH}", echo=False)
 Base = declarative_base()
 SessionLocal = sessionmaker(bind=engine)
 
@@ -90,7 +98,10 @@ class Preference(Base):
 def init_db() -> None:
     """Create all tables if they don't exist. Safe to call multiple times."""
     Base.metadata.create_all(engine)
-    logger.info(f"SQLite database initialized at {DB_PATH}")
+    if DATABASE_URL:
+        logger.info("Cloud PostgreSQL database initialized with tables")
+    else:
+        logger.info(f"SQLite database initialized at {DB_PATH}")
 
 
 def get_or_create_user(user_id: str, name: str = "User", email: str = "", timezone: str = None) -> None:

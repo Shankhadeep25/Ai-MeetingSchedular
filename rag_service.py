@@ -32,7 +32,11 @@ CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "./data/chroma")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 COLLECTION_NAME = "meetings"
 
-# Ensure chroma directory exists
+# Pinecone Cloud Vector DB (Optional)
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "ai-meetings")
+
+# Ensure chroma directory exists for fallback
 os.makedirs(CHROMA_PERSIST_DIR, exist_ok=True)
 
 
@@ -43,6 +47,38 @@ os.makedirs(CHROMA_PERSIST_DIR, exist_ok=True)
 _chroma_client = None
 _collection = None
 _embedding_fn = None
+_st_model = None
+_pinecone_index = None
+
+
+def _get_sentence_transformer_model():
+    """Load local sentence-transformers encoder."""
+    global _st_model
+    if _st_model is None:
+        logger.info(f"Loading embedding model: {EMBEDDING_MODEL}...")
+        from sentence_transformers import SentenceTransformer
+        _st_model = SentenceTransformer(EMBEDDING_MODEL)
+    return _st_model
+
+
+def _get_pinecone_index():
+    """Connect to Pinecone Cloud Serverless Index."""
+    global _pinecone_index
+    if _pinecone_index is None and PINECONE_API_KEY:
+        from pinecone import Pinecone, ServerlessSpec
+        pc = Pinecone(api_key=PINECONE_API_KEY)
+        existing = [idx["name"] for idx in pc.list_indexes()]
+        if PINECONE_INDEX_NAME not in existing:
+            logger.info(f"Creating Pinecone index '{PINECONE_INDEX_NAME}' (384-dim, cosine)...")
+            pc.create_index(
+                name=PINECONE_INDEX_NAME,
+                dimension=384,
+                metric="cosine",
+                spec=ServerlessSpec(cloud="aws", region="us-east-1"),
+            )
+        _pinecone_index = pc.Index(PINECONE_INDEX_NAME)
+        logger.info(f"Connected to Pinecone cloud index: {PINECONE_INDEX_NAME}")
+    return _pinecone_index
 
 
 def _get_embedding_function():
@@ -144,6 +180,21 @@ def index_meeting(meeting_id: int | str, meeting: dict, user_id: str) -> None:
         "event_link": meeting.get("event_link", ""),
     }
 
+    # Pinecone Cloud Path
+    if PINECONE_API_KEY:
+        try:
+            index = _get_pinecone_index()
+            encoder = _get_sentence_transformer_model()
+            vector = encoder.encode(document).tolist()
+            metadata["document"] = document
+            index.upsert(vectors=[{"id": doc_id, "values": vector, "metadata": metadata}])
+            logger.info(f"Indexed meeting {doc_id} to Pinecone Cloud: {document!r}")
+            return
+        except Exception as e:
+            logger.warning(f"Pinecone indexing error: {e}, falling back to local ChromaDB")
+
+    # Local ChromaDB Fallback
+    collection = _get_collection()
     collection.add(
         ids=[doc_id],
         documents=[document],
@@ -175,6 +226,31 @@ def retrieve_context(
     Returns:
         List of meeting description strings ordered by relevance
     """
+    # Pinecone Cloud Retrieval
+    if PINECONE_API_KEY:
+        try:
+            index = _get_pinecone_index()
+            encoder = _get_sentence_transformer_model()
+            query_vector = encoder.encode(query).tolist()
+            filter_dict = {"user_id": user_id} if user_id else None
+            res = index.query(
+                vector=query_vector,
+                top_k=n_results,
+                include_metadata=True,
+                filter=filter_dict,
+            )
+            matches = res.get("matches", [])
+            relevant = [
+                m["metadata"]["document"]
+                for m in matches
+                if m.get("score", 0) >= min_relevance and "document" in m.get("metadata", {})
+            ]
+            logger.info(f"Retrieved {len(relevant)} docs from Pinecone Cloud for: {query[:50]!r}")
+            return relevant
+        except Exception as e:
+            logger.warning(f"Pinecone query error: {e}, falling back to ChromaDB")
+
+    # Local ChromaDB Fallback
     collection = _get_collection()
 
     if collection.count() == 0:

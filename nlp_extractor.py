@@ -169,6 +169,55 @@ def resolve_date(phrase: str, timezone: str = "Asia/Kolkata") -> Optional[dateti
 # Main Extraction Function
 # ─────────────────────────────────────────────
 
+_cached_working_model = None
+
+
+def get_best_available_model(client: Groq, preferred_model: str) -> str:
+    """Dynamically determine the best accessible model from this Groq account."""
+    global _cached_working_model
+    if _cached_working_model:
+        return _cached_working_model
+    try:
+        models = [
+            m.id for m in client.models.list().data
+            if "whisper" not in m.id.lower() and "guard" not in m.id.lower()
+        ]
+        logger.info(f"Available Groq models on this account: {models}")
+        if preferred_model in models:
+            _cached_working_model = preferred_model
+            return _cached_working_model
+
+        # Priority order of models with tool-calling capabilities
+        # Includes both standard Llama/Mixtral AND newer Groq account models
+        priorities = [
+            # Standard Llama models (most accounts)
+            "llama-3.3-70b-versatile",
+            "llama-3.1-70b-versatile",
+            "llama-3.1-8b-instant",
+            "llama3-70b-8192",
+            "llama3-8b-8192",
+            "mixtral-8x7b-32768",
+            "gemma2-9b-it",
+            # OpenAI-compatible models on newer Groq accounts
+            "openai/gpt-oss-120b",
+            "openai/gpt-oss-20b",
+            # Qwen models
+            "qwen/qwen3.8-27b",
+        ]
+        for p in priorities:
+            if p in models:
+                _cached_working_model = p
+                logger.info(f"Auto-selected working model from account: '{_cached_working_model}'")
+                return _cached_working_model
+        # Do NOT fall back to models[0] — unknown models may not support tool calling
+        logger.warning(f"None of priority models found. Will try preferred: '{preferred_model}'")
+    except Exception as e:
+        logger.warning(f"Could not query Groq models list: {e}")
+
+    _cached_working_model = preferred_model
+    return preferred_model
+
+
 def extract_meeting_info(
     user_text: str,
     timezone: str = None,
@@ -186,7 +235,7 @@ def extract_meeting_info(
         MeetingRequest Pydantic object
     """
     tz = timezone or os.getenv("DEFAULT_TIMEZONE", "Asia/Kolkata")
-    model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    preferred_model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
     api_key = os.getenv("GROQ_API_KEY")
 
     if not api_key:
@@ -195,6 +244,7 @@ def extract_meeting_info(
         )
 
     client = Groq(api_key=api_key)
+    model = get_best_available_model(client, preferred_model)
 
     # Build messages — include prior conversation for multi-turn context
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
@@ -218,34 +268,8 @@ def extract_meeting_info(
     except Exception as e:
         logger.error(f"Groq API call failed: {e}")
         error_msg = str(e)
-        
-        # Auto-fallback if the specified model is not found on this Groq account
-        if "model_not_found" in error_msg or "404" in error_msg:
-            fallback_model = "llama-3.1-8b-instant"
-            if model != fallback_model:
-                logger.info(f"Model '{model}' not found. Retrying with fallback: '{fallback_model}'...")
-                try:
-                    response = client.chat.completions.create(
-                        model=fallback_model,
-                        messages=messages,
-                        tools=[MEETING_TOOL_SCHEMA],
-                        tool_choice="required",
-                        temperature=0.1,
-                        max_tokens=512,
-                    )
-                except Exception as fallback_err:
-                    return MeetingRequest(
-                        intent="schedule",
-                        is_ambiguous=True,
-                        clarification_needed=f"⚠️ Model error: {fallback_err}. Please set GROQ_MODEL=llama-3.1-8b-instant in `.env`.",
-                    )
-            else:
-                return MeetingRequest(
-                    intent="schedule",
-                    is_ambiguous=True,
-                    clarification_needed=f"⚠️ Model '{model}' not accessible on this Groq account.",
-                )
-        elif "401" in error_msg or "Invalid API Key" in error_msg or "invalid_api_key" in error_msg:
+
+        if "401" in error_msg or "Invalid API Key" in error_msg or "invalid_api_key" in error_msg:
             return MeetingRequest(
                 intent="schedule",
                 is_ambiguous=True,
