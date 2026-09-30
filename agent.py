@@ -339,6 +339,11 @@ def _book_meeting(
         else ""
     )
 
+    public_cal_url = os.getenv(
+        "PUBLIC_CALENDAR_URL",
+        "https://calendar.google.com/calendar/embed?src=testuserkiit01%40gmail.com&ctz=Asia%2FKolkata",
+    )
+
     response = (
         f"✅ **Meeting booked!**\n\n"
         f"📅 **{meeting.title}**{participants_str}\n"
@@ -346,7 +351,7 @@ def _book_meeting(
     )
 
     if event_link:
-        response += f"🔗 [View on Google Calendar]({event_link})"
+        response += f"🔗 [Event Details]({event_link}) · 📅 [Open Live Calendar Grid]({public_cal_url})"
     elif not is_calendar_configured():
         response += (
             "\n\n*(ℹ️ Note: Saved to database, but Google Calendar invite was not generated because Google Calendar is not connected yet. "

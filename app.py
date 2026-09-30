@@ -214,6 +214,20 @@ with st.sidebar:
         st.markdown('<span class="status-badge status-connected">● ChromaDB Local</span>', unsafe_allow_html=True)
 
     st.markdown("---")
+    # Public Calendar View Link
+    public_cal_url = os.getenv(
+        "PUBLIC_CALENDAR_URL",
+        "https://calendar.google.com/calendar/embed?src=testuserkiit01%40gmail.com&ctz=Asia%2FKolkata",
+    )
+    st.markdown(
+        f'<a href="{public_cal_url}" target="_blank" style="'
+        'display:block; text-align:center; padding:8px 12px; '
+        'background:linear-gradient(135deg,#1e3a8a,#3b82f6); '
+        'color:white; border-radius:8px; text-decoration:none; '
+        'font-weight:600; font-size:0.9rem; margin-bottom:12px;">'
+        '📅 Open Live Calendar Grid</a>',
+        unsafe_allow_html=True,
+    )
     st.markdown("### 📋 Upcoming Schedule")
     try:
         upcoming = get_upcoming_meetings(st.session_state.user_id, days=7)
